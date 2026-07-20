@@ -1,4 +1,8 @@
+import DOMPurify from "dompurify";
+
 const htmlTagPattern = /<\/?(div|p|br|strong|b|span|mark|ul|ol|li|font|table|tbody|thead|tfoot|tr|td|th)\b/i;
+const richTextTags = ["br", "strong", "b", "span", "mark", "div"];
+const richTextAttributes = ["class", "contenteditable"];
 
 function escapeHtml(value: string) {
   return value
@@ -9,9 +13,27 @@ function escapeHtml(value: string) {
 }
 
 function decodeHtmlEntities(value: string) {
-  const textarea = document.createElement("textarea");
-  textarea.innerHTML = value;
-  return textarea.value;
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: "\u00a0",
+    quot: '"',
+  };
+
+  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, reference) => {
+    const name = reference.toLowerCase();
+    if (name in namedEntities) return namedEntities[name];
+    if (!name.startsWith("#")) return entity;
+
+    const codePoint = name.startsWith("#x")
+      ? Number.parseInt(name.slice(2), 16)
+      : Number.parseInt(name.slice(1), 10);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : entity;
+  });
 }
 
 function normalizeWhitespace(value: string) {
@@ -26,65 +48,12 @@ export function plainTextToHtml(value: string) {
 }
 
 function tableHtmlToText(html: string) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const rows = Array.from(doc.querySelectorAll("tr"))
-    .map((row) =>
-      Array.from(row.querySelectorAll("th,td"))
-        .map((cell) => normalizeWhitespace(cell.textContent || ""))
-        .filter(Boolean)
-        .join(" \t ")
-    )
-    .filter(Boolean);
-  if (rows.length) return rows.join("\n");
-  return normalizeWhitespace(doc.body.textContent || "");
-}
-
-function colorStyle(element: Element) {
-  const style = element.getAttribute("style") || "";
-  const color = /(?:^|;)\s*color\s*:\s*([^;]+)/i.exec(style)?.[1]?.trim();
-  if (!color || /expression|url|javascript/i.test(color)) return "";
-  return ` style="color: ${escapeHtml(color)}"`;
-}
-
-function sanitizeNode(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || "");
-  if (node.nodeType !== Node.ELEMENT_NODE) return "";
-
-  const element = node as HTMLElement;
-  const children = Array.from(element.childNodes).map(sanitizeNode).join("");
-
-  switch (element.tagName) {
-    case "BR":
-      return "<br>";
-    case "B":
-    case "STRONG":
-      return `<strong>${children}</strong>`;
-    case "MARK":
-      return `<mark>${children}</mark>`;
-    case "FONT": {
-      const color = element.getAttribute("color");
-      if (color && !/expression|url|javascript/i.test(color)) {
-        return `<span style="color: ${escapeHtml(color)}">${children}</span>`;
-      }
-      return children;
-    }
-    case "SPAN":
-      if (element.classList.contains("todo-check")) {
-        const checked = element.classList.contains("checked") ? " checked" : "";
-        return `<span class="todo-check${checked}" contenteditable="false"></span>`;
-      }
-      return `<span${colorStyle(element)}>${children}</span>`;
-    case "P":
-    case "DIV":
-      return children ? `<div>${children}</div>` : "<div><br></div>";
-    case "LI":
-      return `<div>${children}</div>`;
-    case "UL":
-    case "OL":
-      return children;
-    default:
-      return children;
-  }
+  const tableText = html
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*\/(?:tr|p|div|li)\s*>/gi, "\n")
+    .replace(/<\s*\/(?:th|td)\s*>/gi, "\t");
+  const text = DOMPurify.sanitize(tableText, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
+  return normalizeWhitespace(decodeHtmlEntities(text).replace(/[ \t]+\t/g, "\t"));
 }
 
 export function sanitizeRichHtml(html: string) {
@@ -92,8 +61,12 @@ export function sanitizeRichHtml(html: string) {
     return plainTextToHtml(tableHtmlToText(html));
   }
 
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return Array.from(doc.body.childNodes).map(sanitizeNode).join("").trim();
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: richTextTags,
+    ALLOWED_ATTR: richTextAttributes,
+    ALLOW_DATA_ATTR: false,
+    FORBID_ATTR: ["style"],
+  }).trim();
 }
 
 export function sanitizeClipboardHtml(html: string, fallbackText = "") {
@@ -140,7 +113,7 @@ export function insertHtmlAtSelection(editor: HTMLElement, html: string) {
 
   range.deleteContents();
   const template = document.createElement("template");
-  template.innerHTML = html;
+  template.innerHTML = sanitizeRichHtml(html);
   const fragment = template.content;
   const lastNode = fragment.lastChild;
   range.insertNode(fragment);
