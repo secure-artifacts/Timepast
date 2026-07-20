@@ -42,6 +42,7 @@ function App() {
   const [brightness, setBrightness] = useState(() => Number(localStorage.getItem("timepast.brightness") || "100"));
   const [miniAlwaysOnTop, setMiniAlwaysOnTop] = useState(() => localStorage.getItem("timepast.miniAlwaysOnTop") !== "false");
   const [miniEdgeHide, setMiniEdgeHide] = useState(() => localStorage.getItem("timepast.miniEdgeHide") === "true");
+  const [miniOpacity, setMiniOpacity] = useState(() => Math.min(100, Math.max(45, Number(localStorage.getItem("timepast.miniOpacity") || "100"))));
   const dueReminderIds = useRef(new Set<number>());
   const [activeTimer, setActiveTimer] = useActiveTimer();
   useEffect(() => {
@@ -86,10 +87,11 @@ function App() {
   useEffect(() => { localStorage.setItem("timepast.brightness", String(brightness)); }, [brightness]);
   useEffect(() => { localStorage.setItem("timepast.miniAlwaysOnTop", String(miniAlwaysOnTop)); }, [miniAlwaysOnTop]);
   useEffect(() => { localStorage.setItem("timepast.miniEdgeHide", String(miniEdgeHide)); }, [miniEdgeHide]);
+  useEffect(() => { localStorage.setItem("timepast.miniOpacity", String(miniOpacity)); }, [miniOpacity]);
 
   const activeEvents = eventTypes.filter((item) => !item.archived);
   const quickEvents = activeEvents.filter((item) => item.pinned);
-  const startTimer = (event: EventType) => !activeTimer && setActiveTimer({ eventTypeId: event.id, eventName: event.name, eventColor: event.color, startedAt: new Date().toISOString() });
+  const startTimer = (event: EventType, note = "") => !activeTimer && setActiveTimer({ eventTypeId: event.id, eventName: event.name, eventColor: event.color, startedAt: new Date().toISOString(), note: note.trim() || undefined });
   const startTodoTimer = (todo: Todo) => {
     if (activeTimer) {
       setView("entries");
@@ -131,7 +133,7 @@ function App() {
     return () => { noteListener.then((off) => off()).catch(() => undefined); pomodoroListener.then((off) => off()).catch(() => undefined); };
   }, [notes.length]);
 
-  if (mini) return <MiniBar events={quickEvents.length ? quickEvents : activeEvents} activeTimer={activeTimer} pomodoro={pomodoro} alwaysOnTop={miniAlwaysOnTop} edgeHide={miniEdgeHide} onAlwaysOnTopChange={setMiniAlwaysOnTop} onEdgeHideChange={setMiniEdgeHide} onStart={startTimer} onStop={() => activeTimer && finishActiveTimer(activeTimer, setActiveTimer, refresh, setStatus)} onNote={() => createNote(true)} onPomodoro={() => setPomodoro((value) => value ? 0 : 25 * 60)} onAddEvent={addQuickEvent} onExpand={() => setMini(false)} />;
+  if (mini) return <MiniBar events={quickEvents.length ? quickEvents : activeEvents} activeTimer={activeTimer} pomodoro={pomodoro} alwaysOnTop={miniAlwaysOnTop} edgeHide={miniEdgeHide} opacity={miniOpacity} onAlwaysOnTopChange={setMiniAlwaysOnTop} onEdgeHideChange={setMiniEdgeHide} onOpacityChange={setMiniOpacity} onStart={startTimer} onStop={() => activeTimer && finishActiveTimer(activeTimer, setActiveTimer, refresh, setStatus)} onNote={() => createNote(true)} onPomodoro={() => setPomodoro((value) => value ? 0 : 25 * 60)} onAddEvent={addQuickEvent} onExpand={() => setMini(false)} />;
 
   return <div className="app" data-theme={theme} style={{ filter: `brightness(${brightness}%)` }}>
     <aside className="sidebar">
@@ -290,13 +292,14 @@ function PomodoroView({ events, sessions, refresh, setStatus }: { events: EventT
 function SettingsView({ events, refresh, theme, setTheme, brightness, setBrightness, setStatus }: { events: EventType[]; refresh: () => Promise<void>; theme: string; setTheme: (value: string) => void; brightness: number; setBrightness: (value: number) => void; setStatus: (value: string) => void }) {
   const [name, setName] = useState("");
   const [color, setColor] = useState("#3b82f6");
+  const [editingEvent, setEditingEvent] = useState<EventType | null>(null);
   const [autostart, setAutostart] = useState(() => localStorage.getItem("timepast.autostart") === "true");
   const themes = [{ id: "light", label: "明亮" }, { id: "night", label: "灰蓝夜间" }, { id: "tech", label: "科技" }, { id: "cute", label: "可爱" }, { id: "industrial", label: "工业" }];
   const changeAutostart = (enabled: boolean) => { setAutostart(enabled); localStorage.setItem("timepast.autostart", String(enabled)); setStatus(enabled ? "正在开启开机自启" : "正在关闭开机自启"); api.setAutostart(enabled).then(() => setStatus(enabled ? "已开启开机自启" : "已关闭开机自启")).catch((error) => { setAutostart(!enabled); localStorage.setItem("timepast.autostart", String(!enabled)); setStatus(`开机自启设置失败：${String(error)}`); }); };
   return <section className="grid settings-grid">
     <div className="panel"><div className="panel-head"><h2>外观与启动</h2></div><label>界面皮肤<select value={theme} onChange={(event) => setTheme(event.target.value)}>{themes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><label>界面亮度<input type="range" min="75" max="115" value={brightness} onChange={(event) => setBrightness(Number(event.target.value))} /><span>{brightness}%</span></label><label className="setting-toggle"><input type="checkbox" checked={autostart} onChange={(event) => changeAutostart(event.target.checked)} />开机自动启动 TimePast</label></div>
     <div className="panel"><div className="panel-head"><h2>事件类型</h2></div><label>名称<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>颜色<input type="color" value={color} onChange={(event) => setColor(event.target.value)} /></label><button className="primary" onClick={async () => { if (!name.trim()) return; await api.saveEventType({ id: 0, name, color, sortOrder: events.length + 1, pinned: true, archived: false }); setName(""); await refresh(); }}><Plus size={16} />添加事件</button></div>
-    <div className="panel wide"><div className="event-list">{events.map((item) => <div className="event-row" key={item.id}><span className="dot" style={{ background: item.color }} /><strong>{item.name}</strong><button onClick={async () => { const pinned = !item.pinned; const sortOrder = pinned ? Math.min(0, ...events.filter((event) => event.pinned && event.id !== item.id).map((event) => event.sortOrder)) - 1 : item.sortOrder; await api.saveEventType({ ...item, pinned, archived: pinned ? false : item.archived, sortOrder }); await refresh(); }}><Pin size={15} />{item.pinned ? "取消置顶" : "置顶"}</button><button onClick={async () => { await api.archiveEventType(item.id); await refresh(); }}><Trash2 size={15} />隐藏</button><button className="danger-icon" title="删除事件" onClick={async () => { try { await api.deleteEventType(item.id); await refresh(); setStatus("事件已删除"); } catch (error) { setStatus("无法删除已有打卡记录的事件，请使用隐藏。"); } }}><Trash2 size={15} />删除</button></div>)}</div></div>
+    <div className="panel wide"><div className="event-list">{events.map((item) => editingEvent?.id === item.id ? <div className="event-row event-edit" key={item.id}><span className="dot" style={{ background: editingEvent.color }} /><input aria-label="事件名称" value={editingEvent.name} onChange={(event) => setEditingEvent({ ...editingEvent, name: event.target.value })} /><input aria-label="事件颜色" type="color" value={editingEvent.color} onChange={(event) => setEditingEvent({ ...editingEvent, color: event.target.value })} /><button className="primary" onClick={async () => { if (!editingEvent.name.trim()) return; await api.saveEventType({ ...editingEvent, name: editingEvent.name.trim() }); setEditingEvent(null); await refresh(); setStatus("事件已更新"); }}>保存</button><button onClick={() => setEditingEvent(null)}>取消</button></div> : <div className="event-row" key={item.id}><span className="dot" style={{ background: item.color }} /><strong>{item.name}</strong><button onClick={() => setEditingEvent(item)}><Edit3 size={15} />编辑</button><button onClick={async () => { const pinned = !item.pinned; const sortOrder = pinned ? Math.min(0, ...events.filter((event) => event.pinned && event.id !== item.id).map((event) => event.sortOrder)) - 1 : item.sortOrder; await api.saveEventType({ ...item, pinned, archived: pinned ? false : item.archived, sortOrder }); await refresh(); }}><Pin size={15} />{item.pinned ? "取消置顶" : "置顶"}</button><button onClick={async () => { await api.archiveEventType(item.id); await refresh(); }}><Trash2 size={15} />隐藏</button><button className="danger-icon" title="删除事件" onClick={async () => { try { await api.deleteEventType(item.id); await refresh(); setStatus("事件已删除"); } catch (error) { setStatus("无法删除已有打卡记录的事件，请使用隐藏。"); } }}><Trash2 size={15} />删除</button></div>)}</div></div>
   </section>;
 }
 function Empty({ text }: { text: string }) { return <div className="empty"><span>{text}</span></div>; }

@@ -1,4 +1,4 @@
-﻿import { format, parseISO } from "date-fns";
+import { format, parseISO } from "date-fns";
 import type { TimeEntry } from "./types";
 
 export function todayDate(): string {
@@ -19,7 +19,11 @@ export function isoToTimeInput(value: string): string {
 
 export function copyTextForEntry(entry: TimeEntry): string {
   const note = entry.note.trim();
-  return `${entry.startTime}-${entry.endTime} ${entry.eventName}${note ? ` - ${note}` : ""}`;
+  return `${entry.startTime}-${entry.endTime}${note ? ` ${note}` : ""}`;
+}
+
+export function copyTextForEntries(entries: TimeEntry[]): string {
+  return entries.map(copyTextForEntry).join("\n");
 }
 
 export function minutesBetween(start: string, end: string): number {

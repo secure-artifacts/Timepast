@@ -15,7 +15,6 @@
     "core:window:allow-set-position",
     "core:window:allow-set-always-on-top",
     "core:event:default",
-    "notification:default",
-    "opener:default"
+    "notification:default"
   ]
 }

@@ -1,5 +1,5 @@
-use chrono::Utc;
-use rusqlite::{params, Connection};
+use chrono::{NaiveDate, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -266,13 +266,34 @@ fn bool_i(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
 
-fn validate_time_range(start: &str, end: &str) -> Result<(), AppError> {
+fn parse_time(value: &str) -> Result<(u8, u8), AppError> {
+    if value.len() != 5 || !value.is_char_boundary(2) || &value[2..3] != ":" {
+        return Err(AppError::Invalid("time must use HH:MM".to_string()));
+    }
+    let hour = value[..2].parse::<u8>().map_err(|_| AppError::Invalid("invalid hour".to_string()))?;
+    let minute = value[3..].parse::<u8>().map_err(|_| AppError::Invalid("invalid minute".to_string()))?;
+    if hour > 23 || minute > 59 {
+        return Err(AppError::Invalid("time is out of range".to_string()));
+    }
+    Ok((hour, minute))
+}
+
+fn validate_time_entry(entry: &TimeEntryInput) -> Result<(), AppError> {
+    let start = parse_time(&entry.start_time)?;
+    let end = parse_time(&entry.end_time)?;
     if start >= end {
         return Err(AppError::Invalid("end time must be after start time".to_string()));
     }
+    NaiveDate::parse_from_str(&entry.entry_date, "%Y-%m-%d")
+        .map_err(|_| AppError::Invalid("entry date must use YYYY-MM-DD".to_string()))?;
+    if entry.note.chars().count() > 4_000 {
+        return Err(AppError::Invalid("note is too long".to_string()));
+    }
+    if !matches!(entry.source_mode.as_str(), "manual" | "timer" | "pomodoro") {
+        return Err(AppError::Invalid("unsupported entry source".to_string()));
+    }
     Ok(())
 }
-
 fn with_conn<T>(db: &State<Db>, f: impl FnOnce(&Connection) -> Result<T, AppError>) -> Result<T, AppError> {
     let conn = db.lock().map_err(|_| AppError::Invalid("database lock poisoned".to_string()))?;
     f(&conn)
@@ -325,13 +346,27 @@ fn delete_event_type(db: State<Db>, id: i64) -> Result<(), AppError> {
     with_conn(&db, |conn| {
         let references: i64 = conn.query_row("SELECT COUNT(*) FROM time_entries WHERE event_type_id = ?1", params![id], |row| row.get(0))?;
         if references > 0 {
-            return Err(AppError::Invalid("event type has recorded time entries and cannot be deleted".to_string()));
+            let fallback: Option<i64> = conn.query_row(
+                "SELECT id FROM event_types WHERE name = '未分类' AND id != ?1 ORDER BY archived, id LIMIT 1",
+                params![id],
+                |row| row.get(0),
+            ).optional()?;
+            let fallback_id = match fallback {
+                Some(existing) => existing,
+                None => {
+                    conn.execute(
+                        "INSERT INTO event_types (name, color, sort_order, pinned, archived) VALUES ('未分类', '#64748b', 999999, 0, 0)",
+                        [],
+                    )?;
+                    conn.last_insert_rowid()
+                }
+            };
+            conn.execute("UPDATE time_entries SET event_type_id = ?1 WHERE event_type_id = ?2", params![fallback_id, id])?;
         }
         conn.execute("DELETE FROM event_types WHERE id = ?1", params![id])?;
         Ok(())
     })
 }
-
 #[tauri::command]
 fn archive_event_type(db: State<Db>, id: i64) -> Result<(), AppError> {
     with_conn(&db, |conn| {
@@ -372,7 +407,7 @@ fn list_time_entries(db: State<Db>) -> Result<Vec<TimeEntry>, AppError> {
 
 #[tauri::command]
 fn save_time_entry(db: State<Db>, entry: TimeEntryInput) -> Result<i64, AppError> {
-    validate_time_range(&entry.start_time, &entry.end_time)?;
+    validate_time_entry(&entry)?;
     with_conn(&db, |conn| {
         if entry.id.unwrap_or(0) == 0 {
             conn.execute(
@@ -586,6 +621,9 @@ fn notify_user(app: AppHandle, title: String, body: String) -> Result<(), AppErr
     Ok(())
 }
 fn geometry_path(app: &AppHandle, name: &str) -> Result<PathBuf, AppError> {
+    if name != "mini-window" {
+        return Err(AppError::Invalid("unsupported window geometry target".to_string()));
+    }
     let dir = app
         .path()
         .app_data_dir()
@@ -639,6 +677,9 @@ fn save_window_geometry(
 }
 #[tauri::command]
 fn set_main_window_mode(app: AppHandle, mode: String) -> Result<(), AppError> {
+    if !matches!(mode.as_str(), "mini" | "full") {
+        return Err(AppError::Invalid("unsupported window mode".to_string()));
+    }
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| AppError::Invalid("main window not found".to_string()))?;
@@ -808,7 +849,6 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. }) && window.label() == "main" {

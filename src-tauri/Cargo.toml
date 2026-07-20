@@ -1,6 +1,6 @@
 [package]
 name = "timepast"
-version = "0.1.2"
+version = "0.1.5"
 description = "Local-first time entries, notes, reminders, and Pomodoro"
 authors = ["TimePast"]
 edition = "2021"
@@ -19,5 +19,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
-tauri-plugin-opener = "2"
 thiserror = "2"

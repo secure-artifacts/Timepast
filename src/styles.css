@@ -393,7 +393,11 @@ h3 {
 }
 
 .event-row {
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto auto;
+}
+
+.event-row.event-edit {
+  grid-template-columns: auto minmax(140px, 1fr) auto auto auto;
 }
 
 .event-row.archived {
@@ -530,12 +534,13 @@ h3 {
 }
 
 .mini-bar {
+  position: relative;
   width: 100vw;
   height: 100vh;
   min-width: 520px;
   min-height: 48px;
   display: grid;
-  grid-template-columns: 28px minmax(120px, 150px) repeat(7, 36px);
+  grid-template-columns: 28px 104px minmax(72px, 1fr) repeat(6, 36px);
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
@@ -565,6 +570,41 @@ h3 {
   color: #e5edf8;
 }
 
+
+.mini-note-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border-color: #334155;
+  background: #0f172a;
+  color: #e5edf8;
+}
+
+.mini-context-menu {
+  position: absolute;
+  inset: 4px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  background: #111827;
+  border: 1px solid #475569;
+  border-radius: 7px;
+}
+
+.mini-context-menu label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #e5edf8;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mini-context-menu input[type="range"] { width: min(170px, 32vw); }
+.mini-context-menu button { margin-left: auto; width: auto; min-width: 48px; padding: 0 8px; }
 .mini-bar button {
   height: 34px;
   min-width: 36px;
@@ -1213,3 +1253,111 @@ body.note-window-page .desktop-note.collapsed .desktop-note-toolbar {
 .desktop-note-title-display { display: block; max-width: min(180px, 48vw); overflow: hidden; color: #273244; font: inherit; font-weight: 650; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; cursor: grab; }
 .desktop-note-title-display.untitled { color: rgba(39, 50, 68, 0.55); font-weight: 500; }
 .desktop-note-title { width: min(136px, 38vw); }
+
+/* Record categories and copy controls */
+.entry-list-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0 6px;
+}
+
+.entry-category-filter,
+.entry-day-categories {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.entry-category-filter > span {
+  color: #647084;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.entry-category-filter button,
+.entry-day-categories button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #536176;
+  font-size: 12px;
+}
+
+.entry-category-filter button.active,
+.entry-day-categories button.active {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.entry-category-filter i,
+.entry-day-categories i,
+.entry-category i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.entry-copy-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.entry-day-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.entry-day-head {
+  flex: 1 1 180px;
+  width: auto;
+}
+
+.entry-day-categories {
+  justify-content: flex-end;
+}
+
+.entry-row,
+.entry-list.compact .entry-row {
+  grid-template-columns: 10px minmax(96px, 140px) 112px minmax(80px, 1fr) auto auto auto;
+}
+
+.entry-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app[data-theme="night"] .entry-category { color: #e2e8f0; }
+
+@media (max-width: 760px) {
+  .entry-day-header { align-items: flex-start; flex-direction: column; }
+  .entry-day-categories { justify-content: flex-start; }
+  .entry-row,
+  .entry-list.compact .entry-row { grid-template-columns: 10px minmax(82px, 1fr) 92px minmax(0, 1fr) auto; }
+  .entry-row > button:nth-last-of-type(-n + 2) { display: none; }
+}
