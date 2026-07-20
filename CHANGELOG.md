@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.4 - 2026-07-20
+
+### Fixed
+- Created a fresh organization release tag after GitHub Actions was enabled, preserving the tag-triggered provenance chain.
+
 ## v0.1.3 - 2026-07-20
 
 ### Fixed
