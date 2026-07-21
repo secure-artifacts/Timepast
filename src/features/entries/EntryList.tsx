@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Copy, Edit3, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
-import { copyTextForEntries, copyTextForEntry, formatDuration, minutesBetween } from "../../lib/time";
+import { copyTextForEntries, copyTextForEntry, formatDuration, minutesBetween, normalizeDateInput } from "../../lib/time";
 import type { EventType, TimeEntry } from "../../lib/types";
 
 type EntryListProps = {
@@ -10,6 +10,19 @@ type EntryListProps = {
   refresh?: () => Promise<void>;
   compact?: boolean;
 };
+
+function compareEntriesByStartTime(left: TimeEntry, right: TimeEntry): number {
+  return left.startTime.localeCompare(right.startTime) || left.id - right.id;
+}
+
+function groupEntriesByDate(items: TimeEntry[]): Record<string, TimeEntry[]> {
+  const grouped = items.reduce<Record<string, TimeEntry[]>>((result, item) => {
+    (result[item.entryDate] ||= []).push(item);
+    return result;
+  }, {});
+  Object.values(grouped).forEach((group) => group.sort(compareEntriesByStartTime));
+  return grouped;
+}
 
 export function EntryList({ entries, events, refresh, compact = false }: EntryListProps) {
   const [editing, setEditing] = useState<TimeEntry | null>(null);
@@ -22,14 +35,8 @@ export function EntryList({ entries, events, refresh, compact = false }: EntryLi
   const visibleEntries = selectedCategoryId === null
     ? baseEntries
     : baseEntries.filter((item) => item.eventTypeId === selectedCategoryId);
-  const groupedBaseEntries = useMemo(() => baseEntries.reduce<Record<string, TimeEntry[]>>((result, item) => {
-    (result[item.entryDate] ||= []).push(item);
-    return result;
-  }, {}), [baseEntries]);
-  const groupedVisibleEntries = useMemo(() => visibleEntries.reduce<Record<string, TimeEntry[]>>((result, item) => {
-    (result[item.entryDate] ||= []).push(item);
-    return result;
-  }, {}), [visibleEntries]);
+  const groupedBaseEntries = useMemo(() => groupEntriesByDate(baseEntries), [baseEntries]);
+  const groupedVisibleEntries = useMemo(() => groupEntriesByDate(visibleEntries), [visibleEntries]);
   const categories = useMemo(
     () => Array.from(new Map(baseEntries.map((item) => [item.eventTypeId, item])).values()),
     [baseEntries]
@@ -42,7 +49,7 @@ export function EntryList({ entries, events, refresh, compact = false }: EntryLi
 
   const saveEdit = async () => {
     if (!editing || !refresh) return;
-    await api.saveTimeEntry({ ...editing });
+    await api.saveTimeEntry({ ...editing, entryDate: normalizeDateInput(editing.entryDate) });
     setEditing(null);
     await refresh();
   };

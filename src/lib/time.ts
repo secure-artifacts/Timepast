@@ -17,6 +17,10 @@ export function isoToTimeInput(value: string): string {
   return format(parseISO(value), "HH:mm");
 }
 
+export function normalizeDateInput(value: string): string {
+  return value.trim().replace(/\//g, "-");
+}
+
 export function copyTextForEntry(entry: TimeEntry): string {
   const note = entry.note.trim();
   return `${entry.startTime}-${entry.endTime}${note ? ` ${note}` : ""}`;
@@ -29,7 +33,8 @@ export function copyTextForEntries(entries: TimeEntry[]): string {
 export function minutesBetween(start: string, end: string): number {
   const [sh, sm] = start.split(":").map(Number);
   const [eh, em] = end.split(":").map(Number);
-  return eh * 60 + em - (sh * 60 + sm);
+  const difference = eh * 60 + em - (sh * 60 + sm);
+  return difference < 0 ? difference + 24 * 60 : difference;
 }
 
 export function formatDuration(minutes: number): string {

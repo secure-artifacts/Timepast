@@ -239,6 +239,7 @@ fn init_db(conn: &Connection) -> Result<(), AppError> {
     let _ = conn.execute("ALTER TABLE todos ADD COLUMN note TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE todos ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'", []);
     let _ = conn.execute("ALTER TABLE todos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
+    merge_legacy_overnight_entries(conn)?;
 
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM event_types", [], |row| row.get(0))?;
     if count == 0 {
@@ -258,6 +259,40 @@ fn init_db(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+fn merge_legacy_overnight_entries(conn: &Connection) -> Result<(), AppError> {
+    let pairs = {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT previous.id, following.id, following.end_time
+            FROM time_entries AS previous
+            JOIN time_entries AS following
+              ON following.entry_date = date(previous.entry_date, '+1 day')
+             AND following.event_type_id = previous.event_type_id
+             AND following.note = previous.note
+             AND following.source_mode = 'timer'
+             AND following.start_time = '00:00'
+            WHERE previous.source_mode = 'timer'
+              AND previous.end_time = '23:59'
+            ORDER BY previous.id, following.id
+            "#,
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    for (previous_id, following_id, end_time) in pairs {
+        let merged = conn.execute(
+            "UPDATE time_entries SET end_time = ?1 WHERE id = ?2 AND end_time = '23:59'",
+            params![end_time, previous_id],
+        )?;
+        if merged == 1 {
+            conn.execute("DELETE FROM time_entries WHERE id = ?1", params![following_id])?;
+        }
+    }
+    Ok(())
+}
 fn now() -> String {
     Utc::now().to_rfc3339()
 }
@@ -278,14 +313,20 @@ fn parse_time(value: &str) -> Result<(u8, u8), AppError> {
     Ok((hour, minute))
 }
 
+fn normalize_entry_date(value: &str) -> Result<String, AppError> {
+    let normalized = value.trim().replace('/', "-");
+    let date = NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")
+        .map_err(|_| AppError::Invalid("entry date must use YYYY-MM-DD".to_string()))?;
+    Ok(date.format("%Y-%m-%d").to_string())
+}
+
 fn validate_time_entry(entry: &TimeEntryInput) -> Result<(), AppError> {
     let start = parse_time(&entry.start_time)?;
     let end = parse_time(&entry.end_time)?;
-    if start >= end {
-        return Err(AppError::Invalid("end time must be after start time".to_string()));
+    if start == end {
+        return Err(AppError::Invalid("start and end time must differ".to_string()));
     }
-    NaiveDate::parse_from_str(&entry.entry_date, "%Y-%m-%d")
-        .map_err(|_| AppError::Invalid("entry date must use YYYY-MM-DD".to_string()))?;
+    normalize_entry_date(&entry.entry_date)?;
     if entry.note.chars().count() > 4_000 {
         return Err(AppError::Invalid("note is too long".to_string()));
     }
@@ -384,7 +425,7 @@ fn list_time_entries(db: State<Db>) -> Result<Vec<TimeEntry>, AppError> {
                    et.name, et.color, te.note, te.source_mode, te.created_at
             FROM time_entries te
             JOIN event_types et ON et.id = te.event_type_id
-            ORDER BY te.entry_date DESC, te.start_time DESC
+            ORDER BY te.entry_date DESC, te.start_time ASC, te.id ASC
             "#,
         )?;
         let rows = stmt.query_map([], |row| {
@@ -408,18 +449,19 @@ fn list_time_entries(db: State<Db>) -> Result<Vec<TimeEntry>, AppError> {
 #[tauri::command]
 fn save_time_entry(db: State<Db>, entry: TimeEntryInput) -> Result<i64, AppError> {
     validate_time_entry(&entry)?;
+    let entry_date = normalize_entry_date(&entry.entry_date)?;
     with_conn(&db, |conn| {
         if entry.id.unwrap_or(0) == 0 {
             conn.execute(
                 "INSERT INTO time_entries (entry_date, start_time, end_time, event_type_id, note, source_mode, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![entry.entry_date, entry.start_time, entry.end_time, entry.event_type_id, entry.note, entry.source_mode, now()],
+                params![entry_date.as_str(), entry.start_time, entry.end_time, entry.event_type_id, entry.note, entry.source_mode, now()],
             )?;
             Ok(conn.last_insert_rowid())
         } else {
             let id = entry.id.unwrap_or_default();
             conn.execute(
                 "UPDATE time_entries SET entry_date = ?1, start_time = ?2, end_time = ?3, event_type_id = ?4, note = ?5, source_mode = ?6 WHERE id = ?7",
-                params![entry.entry_date, entry.start_time, entry.end_time, entry.event_type_id, entry.note, entry.source_mode, id],
+                params![entry_date.as_str(), entry.start_time, entry.end_time, entry.event_type_id, entry.note, entry.source_mode, id],
             )?;
             Ok(id)
         }
@@ -890,14 +932,74 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running TimePast");
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    fn entry(start_time: &str, end_time: &str) -> TimeEntryInput {
+        TimeEntryInput {
+            id: None,
+            entry_date: "2026-07-20".to_string(),
+            start_time: start_time.to_string(),
+            end_time: end_time.to_string(),
+            event_type_id: 1,
+            note: String::new(),
+            source_mode: "timer".to_string(),
+        }
+    }
 
+    #[test]
+    fn accepts_a_cross_midnight_entry() {
+        assert!(validate_time_entry(&entry("18:52", "01:12")).is_ok());
+    }
 
+    #[test]
+    fn accepts_a_slash_separated_entry_date() {
+        let mut input = entry("18:52", "01:12");
+        input.entry_date = "2026/07/20".to_string();
+        assert!(validate_time_entry(&input).is_ok());
+        assert_eq!(normalize_entry_date(&input.entry_date).unwrap(), "2026-07-20");
+    }
 
+    #[test]
+    fn rejects_a_zero_length_entry() {
+        assert!(validate_time_entry(&entry("18:52", "18:52")).is_err());
+    }
+    #[test]
+    fn merges_a_legacy_midnight_timer_pair() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE time_entries (
+                id INTEGER PRIMARY KEY,
+                entry_date TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                event_type_id INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                source_mode TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO time_entries (entry_date, start_time, end_time, event_type_id, note, source_mode) VALUES ('2026-07-20', '18:52', '23:59', 1, '01-2', 'timer')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO time_entries (entry_date, start_time, end_time, event_type_id, note, source_mode) VALUES ('2026-07-21', '00:00', '01:12', 1, '01-2', 'timer')",
+            [],
+        )
+        .unwrap();
 
+        merge_legacy_overnight_entries(&conn).unwrap();
 
-
-
-
-
-
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM time_entries", [], |row| row.get(0)).unwrap();
+        let (date, start, end): (String, String, String) = conn
+            .query_row("SELECT entry_date, start_time, end_time FROM time_entries", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!((date.as_str(), start.as_str(), end.as_str()), ("2026-07-20", "18:52", "01:12"));
+    }
+}
